@@ -70,28 +70,47 @@ preDM_forMETA_multi <- preDM_with_priority %>%
   select(Author, duplicate, def_priority, HR_mort_F:UCI_mort_M, HR_cardiomort_F:UCI_cardiomort_M, HR_stroke_F:UCI_stroke_M, HR_iscstroke_F:UCI_iscstroke_M,HR_hemstroke_F:UCI_hemstroke_M,HR_CVD_F:UCI_CVD_M,HR_CHD_F:UCI_CHD_M,HR_CKD_F:UCI_CKD_M,HR_HF_F:UCI_HF_M) %>% 
   ungroup()
 
+#doing the nesting below removes the priority, so this saves it to be leftjoined later.
+def_priority_save1 <- preDM_forMETA_multi %>% 
+  select(duplicate,def_priority) %>% 
+  filter(!duplicated(duplicate))
 
 #RUN THE META ANALYSIS --> need to learn map function
 temp <- preDM_forMETA_multi %>%  
+  
+  #Give each row a unique identifier, so there's no identical row errors
   mutate(n = 1:nrow(.), .before = Author) %>% 
+  
+  #pivot all columns to rows, except for c(n, Author, duplicate, def_priority)
   pivot_longer(., -c(n, Author, duplicate, def_priority)) %>% 
+  
+  #Separate HR_mort_F into 3 variables: HR, mort, F
   separate(name, into = c("var", "outcome", "sex"), sep = "_") %>% 
+  
+  #pivot HR, LCI, UCI to columns
   pivot_wider(., names_from = var, values_from = value) %>% 
+  
+  #calculate log_HR and se_log_HR
   mutate(
-    log_HR = log(HR),
-    se_log_HR = (log(UCI) - log(LCI)) / (2*1.96)) %>% 
+    logHR = log(HR),
+    selogHR = (log(UCI) - log(LCI)) / (2*1.96)) %>% 
+  
+  #group by outcome & sex combinations, and then nest the corresponding data frames
   group_by(outcome, sex) %>% 
   nest() %>% 
+  
+  
   mutate(
     # Remove Missing - if you want to silence the warning messages, remove outcomes with no data. Wont work as is. 
     #dataclean = map(data, ~drop_na(.x)))
     
-    # Metagen function - in this code i am running this ....
+    # Add new column called meta -> input is nested data, output is the meta analysis results (as a list)
+    # ~ means calling an existing function, .x means just the inputed data frame
     meta = map(data, ~metagen(
       studlab = .x$Author,
       sort = .x$duplicate,
-      TE = .x$log_HR,
-      seTE = .x$se_log_HR,
+      TE = .x$logHR,
+      seTE = .x$selogHR,
       data = .x,
       backtransf = T,
       sm="HR",
@@ -99,430 +118,212 @@ temp <- preDM_forMETA_multi %>%
       subgroup = .x$duplicate
     )),
     
-    #Extract estimates and put into separate tibble 
+    #Add new column called 'estimate' -> inputs meta results, output is tibble with the fixed results
     estimate = map(meta, ~tibble(
-      Study = unique(.x$studlab), 
+      
+      #take unique study name & subgroup #
+      Author = unique(.x$studlab), 
       duplicate = unique(.x$subgroup),
-      TEfixed = .x$TE.fixed.w,
-      TEse = .x$seTE.fixed.w))
+      
+      #extract fixed TE & se
+      logHR = .x$TE.fixed.w,
+      selogHR = .x$seTE.fixed.w
+      )
+      )
     )
 
 # Step 2: Extract and Clean
 temp2 <- temp %>% 
+  
+  #just take columns we want
   select(outcome, sex, estimate) %>% 
+  
+  #unnest (uncollapse) the estimate nested tables
   unnest(., c(estimate)) %>% 
+  
+  #turn mort and F into mort_F
   unite(., "var", c(outcome, sex)) %>% 
-  pivot_wider(., names_from = var, values_from = c(TEfixed, TEse))
-
-
-#what do i want to do here?
-
-
-#for each outcome:
-# 1. calculate the logHR and the se_logHR  
-#2. store both as new columns in the preMD_forMETA_multi
-#3. 
-
-
-#so map inputs a list, and then does an operation for every single element, and then returns a new list right?
-
-
-
-
-
-
-se_log_HR_mort_F = (log(UCI_mort_F) - log(LCI_mort_F)) / (2*1.96)
-
-
-
-
-
-
-
-
-
-#---------
-#MORTALITY
-#---------
-#Mortality, women
-preDM_priority_filtered_multi_forMETA <- preDM_priority_filtered_multi_forMETA %>% 
-  mutate(
-    log_HR_mort_F = log(HR_mort_F),
-    se_log_HR_mort_F = (log(UCI_mort_F) - log(LCI_mort_F)) / (2*1.96)
-  ) %>% 
-  relocate(log_HR_mort_F, .after = HR_mort_F) %>% 
-  relocate(se_log_HR_mort_F, .after = UCI_mort_F)
-
-mort_F_metaresult_multi <- metagen(
-  studlab = Author,
-  sort = preDM_priority_filtered_multi_forMETA$duplicate,
-  TE = log_HR_mort_F,
-  seTE = se_log_HR_mort_F,
-  data = preDM_priority_filtered_multi_forMETA,
-  backtransf = T,
-  sm="HR",
-  method.tau = "DL",
-  subgroup = preDM_priority_filtered_multi_forMETA$duplicate
-)
-
-#Mortality, men
-preDM_priority_filtered_multi_forMETA <- preDM_priority_filtered_multi_forMETA %>% 
-  mutate(
-    log_HR_mort_M = log(HR_mort_M),
-    se_log_HR_mort_M = (log(UCI_mort_M) - log(LCI_mort_M)) / (2*1.96)
-  ) %>% 
-  relocate(log_HR_mort_M, .after = HR_mort_M) %>% 
-  relocate(se_log_HR_mort_M, .after = UCI_mort_M)
-
-mort_M_metaresult_multi <- metagen(
-  studlab = Author,
-  sort = preDM_priority_filtered_multi_forMETA$duplicate,
-  TE = log_HR_mort_M,
-  seTE = se_log_HR_mort_M,
-  data = preDM_priority_filtered_multi_forMETA,
-  backtransf = T,
-  sm="HR",
-  method.tau = "DL",
-  subgroup = preDM_priority_filtered_multi_forMETA$duplicate
-)
-
-
-#---------------
-#CARDIOMORTALITY
-#---------------
-#cardiomortality, women
-preDM_priority_filtered_multi_forMETA <- preDM_priority_filtered_multi_forMETA %>% 
-  mutate(
-    log_HR_cardiomort_F = log(HR_cardiomort_F),
-    se_log_HR_cardiomort_F = (log(UCI_cardiomort_F) - log(LCI_cardiomort_F)) / (2*1.96)
-  ) %>% 
-  relocate(log_HR_cardiomort_F, .after = HR_cardiomort_F) %>% 
-  relocate(se_log_HR_cardiomort_F, .after = UCI_cardiomort_F)
-
-cardiomort_F_metaresult_multi <- metagen(
-  studlab = Author,
-  sort = preDM_priority_filtered_multi_forMETA$duplicate,
-  TE = log_HR_cardiomort_F,
-  seTE = se_log_HR_cardiomort_F,
-  data = preDM_priority_filtered_multi_forMETA,
-  backtransf = T,
-  sm="HR",
-  method.tau = "DL",
-  subgroup = preDM_priority_filtered_multi_forMETA$duplicate
-)
-
-#cardiomortality, men
-preDM_priority_filtered_multi_forMETA <- preDM_priority_filtered_multi_forMETA %>% 
-  mutate(
-    log_HR_cardiomort_M = log(HR_cardiomort_M),
-    se_log_HR_cardiomort_M = (log(UCI_cardiomort_M) - log(LCI_cardiomort_M)) / (2*1.96)
-  ) %>% 
-  relocate(log_HR_cardiomort_M, .after = HR_cardiomort_M) %>% 
-  relocate(se_log_HR_cardiomort_M, .after = UCI_cardiomort_M)
-
-cardiomort_M_metaresult_multi <- metagen(
-  studlab = Author,
-  sort = preDM_priority_filtered_multi_forMETA$duplicate,
-  TE = log_HR_cardiomort_M,
-  seTE = se_log_HR_cardiomort_M,
-  data = preDM_priority_filtered_multi_forMETA,
-  backtransf = T,
-  sm="HR",
-  method.tau = "DL",
-  subgroup = preDM_priority_filtered_multi_forMETA$duplicate
-)
-
-#---
-#CVD
-#---
-#cvd, women
-preDM_priority_filtered_multi_forMETA <- preDM_priority_filtered_multi_forMETA %>% 
-  mutate(
-    log_HR_CVD_F = log(HR_CVD_F),
-    se_log_HR_CVD_F = (log(UCI_CVD_F) - log(LCI_CVD_F)) / (2*1.96)
-  ) %>% 
-  relocate(log_HR_CVD_F, .after = HR_CVD_F) %>% 
-  relocate(se_log_HR_CVD_F, .after = UCI_CVD_F)
-
-CVD_F_metaresult_multi <- metagen(
-  studlab = Author,
-  sort = preDM_priority_filtered_multi_forMETA$duplicate,
-  TE = log_HR_CVD_F,
-  seTE = se_log_HR_CVD_F,
-  data = preDM_priority_filtered_multi_forMETA,
-  backtransf = T,
-  sm="HR",
-  method.tau = "DL",
-  subgroup = preDM_priority_filtered_multi_forMETA$duplicate
-)
-
-#cvd, men
-preDM_priority_filtered_multi_forMETA <- preDM_priority_filtered_multi_forMETA %>% 
-  mutate(
-    log_HR_CVD_M = log(HR_CVD_M),
-    se_log_HR_CVD_M = (log(UCI_CVD_M) - log(LCI_CVD_M)) / (2*1.96)
-  ) %>% 
-  relocate(log_HR_CVD_M, .after = HR_CVD_M) %>% 
-  relocate(se_log_HR_CVD_M, .after = UCI_CVD_M)
-
-CVD_M_metaresult_multi <- metagen(
-  studlab = Author,
-  sort = preDM_priority_filtered_multi_forMETA$duplicate,
-  TE = log_HR_CVD_M,
-  seTE = se_log_HR_CVD_M,
-  data = preDM_priority_filtered_multi_forMETA,
-  backtransf = T,
-  sm="HR",
-  method.tau = "DL",
-  subgroup = preDM_priority_filtered_multi_forMETA$duplicate
-)
-
-#---
-#CHD
-#---
-#CHD, women
-preDM_priority_filtered_multi_forMETA <- preDM_priority_filtered_multi_forMETA %>% 
-  mutate(
-    log_HR_CHD_F = log(HR_CHD_F),
-    se_log_HR_CHD_F = (log(UCI_CHD_F) - log(LCI_CHD_F)) / (2*1.96)
-  ) %>% 
-  relocate(log_HR_CHD_F, .after = HR_CHD_F) %>% 
-  relocate(se_log_HR_CHD_F, .after = UCI_CHD_F)
-
-CHD_F_metaresult_multi <- metagen(
-  studlab = Author,
-  sort = preDM_priority_filtered_multi_forMETA$duplicate,
-  TE = log_HR_CHD_F,
-  seTE = se_log_HR_CHD_F,
-  data = preDM_priority_filtered_multi_forMETA,
-  backtransf = T,
-  sm="HR",
-  method.tau = "DL",
-  subgroup = preDM_priority_filtered_multi_forMETA$duplicate
-)
-
-#CHD, men
-preDM_priority_filtered_multi_forMETA <- preDM_priority_filtered_multi_forMETA %>% 
-  mutate(
-    log_HR_CHD_M = log(HR_CHD_M),
-    se_log_HR_CHD_M = (log(UCI_CHD_M) - log(LCI_CHD_M)) / (2*1.96)
-  ) %>% 
-  relocate(log_HR_CHD_M, .after = HR_CHD_M) %>% 
-  relocate(se_log_HR_CHD_M, .after = UCI_CHD_M)
-
-CHD_M_metaresult_multi <- metagen(
-  studlab = Author,
-  sort = preDM_priority_filtered_multi_forMETA$duplicate,
-  TE = log_HR_CHD_M,
-  seTE = se_log_HR_CHD_M,
-  data = preDM_priority_filtered_multi_forMETA,
-  backtransf = T,
-  sm="HR",
-  method.tau = "DL",
-  subgroup = preDM_priority_filtered_multi_forMETA$duplicate
-)
-
-
-#------
-#STROKE
-#------
-#STROKE, women
-preDM_priority_filtered_multi_forMETA <- preDM_priority_filtered_multi_forMETA %>% 
-  mutate(
-    log_HR_stroke_F = log(HR_stroke_F),
-    se_log_HR_stroke_F = (log(UCI_stroke_F) - log(LCI_stroke_F)) / (2*1.96)
-  ) %>% 
-  relocate(log_HR_stroke_F, .after = HR_stroke_F) %>% 
-  relocate(se_log_HR_stroke_F, .after = UCI_stroke_F)
-
-stroke_F_metaresult_multi <- metagen(
-  studlab = Author,
-  sort = preDM_priority_filtered_multi_forMETA$duplicate,
-  TE = log_HR_stroke_F,
-  seTE = se_log_HR_stroke_F,
-  data = preDM_priority_filtered_multi_forMETA,
-  backtransf = T,
-  sm="HR",
-  method.tau = "DL",
-  subgroup = preDM_priority_filtered_multi_forMETA$duplicate
-)
-
-#STROKE, men
-preDM_priority_filtered_multi_forMETA <- preDM_priority_filtered_multi_forMETA %>% 
-  mutate(
-    log_HR_stroke_M = log(HR_stroke_M),
-    se_log_HR_stroke_M = (log(UCI_stroke_M) - log(LCI_stroke_M)) / (2*1.96)
-  ) %>% 
-  relocate(log_HR_stroke_M, .after = HR_stroke_M) %>% 
-  relocate(se_log_HR_stroke_M, .after = UCI_stroke_M)
-
-stroke_M_metaresult_multi <- metagen(
-  studlab = Author,
-  sort = preDM_priority_filtered_multi_forMETA$duplicate,
-  TE = log_HR_stroke_M,
-  seTE = se_log_HR_stroke_M,
-  data = preDM_priority_filtered_multi_forMETA,
-  backtransf = T,
-  sm="HR",
-  method.tau = "DL",
-  subgroup = preDM_priority_filtered_multi_forMETA$duplicate
-)
-
-#-------------------
-#PUT INTO DATA FRAME
-#-------------------
-
-y<-unique(preDM_priority_filtered_multi[,c("Author","duplicate", "def_priority")])
-x <- data.frame(
   
-  duplicate = mort_F_metaresult_multi$subgroup.levels,
-  
-  log_HR_mort_F = mort_F_metaresult_multi$TE.fixed.w,
-  se_log_HR_mort_F = mort_F_metaresult_multi$seTE.fixed.w,
-  log_HR_mort_M = mort_M_metaresult_multi$TE.fixed.w,
-  se_log_HR_mort_M = mort_M_metaresult_multi$seTE.fixed.w,
-  
-  log_HR_cardiomort_F = cardiomort_F_metaresult_multi$TE.fixed.w,
-  se_log_HR_cardiomort_F = cardiomort_F_metaresult_multi$seTE.fixed.w,
-  log_HR_cardiomort_M = cardiomort_M_metaresult_multi$TE.fixed.w,
-  se_log_HR_cardiomort_M = cardiomort_M_metaresult_multi$seTE.fixed.w,
-  
-  log_HR_CVD_F = CVD_F_metaresult_multi$TE.fixed.w,
-  se_log_HR_CVD_F = CVD_F_metaresult_multi$seTE.fixed.w,
-  log_HR_CVD_M = CVD_M_metaresult_multi$TE.fixed.w,
-  se_log_HR_CVD_M = CVD_M_metaresult_multi$seTE.fixed.w,
-  
-  log_HR_CHD_F = CHD_F_metaresult_multi$TE.fixed.w,
-  se_log_HR_CHD_F = CHD_F_metaresult_multi$seTE.fixed.w,
-  log_HR_CHD_M = CHD_M_metaresult_multi$TE.fixed.w,
-  se_log_HR_CHD_M = CHD_M_metaresult_multi$seTE.fixed.w,
-  
-  log_HR_stroke_F = stroke_F_metaresult_multi$TE.fixed.w,
-  se_log_HR_stroke_F = stroke_F_metaresult_multi$seTE.fixed.w,
-  log_HR_stroke_M = stroke_M_metaresult_multi$TE.fixed.w,
-  se_log_HR_stroke_M = stroke_M_metaresult_multi$seTE.fixed.w
-)
-pooled_multi<-left_join(y, x, by="duplicate")
+  #make log_HR_mort_F and se_HR_mort_F
+  pivot_wider(., names_from = var, values_from = c(logHR, selogHR))
 
- 
-
-#calculate logHRS and SE for all the single ones
-preDM_priority_filtered_single_forMETA <- preDM_priority_filtered_single %>% 
-  select(Author, duplicate, def_priority, HR_mort_F:UCI_mort_M, HR_cardiomort_F:UCI_cardiomort_M, HR_stroke_F:UCI_stroke_M, HR_iscstroke_F:UCI_iscstroke_M,HR_hemstroke_F:UCI_hemstroke_M,HR_CVD_F:UCI_CVD_M,HR_CHD_F:UCI_CHD_M,HR_CKD_F:UCI_CKD_M,HR_HF_F:UCI_HF_M)
-
-#mortality
-#Calculate log HR of mort HR for women AND SE so we can use it in the meta analysis
-preDM_priority_filtered_single_forMETA <- preDM_priority_filtered_single_forMETA %>% 
-  mutate(
-    log_HR_mort_F = log(HR_mort_F),
-    se_log_HR_mort_F = (log(UCI_mort_F) - log(LCI_mort_F)) / (2*1.96)
-  ) %>% 
-  relocate(log_HR_mort_F, .after = HR_mort_F) %>% 
-  relocate(se_log_HR_mort_F, .after = UCI_mort_F)
-
-preDM_priority_filtered_single_forMETA<-as.data.frame(preDM_priority_filtered_single_forMETA) # always best to just change to data frame
-
-#MEN
-#Calculate log HR of mort HR for women AND SE. 
-preDM_priority_filtered_single_forMETA <- preDM_priority_filtered_single_forMETA %>% 
-  mutate(
-    log_HR_mort_M = log(HR_mort_M),
-    se_log_HR_mort_M = (log(UCI_mort_M) - log(LCI_mort_M)) / (2*1.96)
-  ) %>% 
-  relocate(log_HR_mort_M, .after = HR_mort_M) %>% 
-  relocate(se_log_HR_mort_M, .after = UCI_mort_M)
-
-#cardiomortality
-#Calculate log HR of CVD mort HR for women AND SE so we can use it in the meta analysis
-preDM_priority_filtered_single_forMETA <- preDM_priority_filtered_single_forMETA %>% 
-  mutate(
-    log_HR_cardiomort_F = log(HR_cardiomort_F),
-    se_log_HR_cardiomort_F = (log(UCI_cardiomort_F) - log(LCI_cardiomort_F)) / (2*1.96)
-  ) %>% 
-  relocate(log_HR_cardiomort_F, .after = HR_cardiomort_F) %>% 
-  relocate(se_log_HR_cardiomort_F, .after = UCI_cardiomort_F)
-
-#Calculate log HR of CVD mort HR for women AND SE so we can use it in the meta analysis
-preDM_priority_filtered_single_forMETA <- preDM_priority_filtered_single_forMETA %>% 
-  mutate(
-    log_HR_cardiomort_M = log(HR_cardiomort_M),
-    se_log_HR_cardiomort_M = (log(UCI_cardiomort_M) - log(LCI_cardiomort_M)) / (2*1.96)
-  ) %>% 
-  relocate(log_HR_cardiomort_M, .after = HR_cardiomort_M) %>% 
-  relocate(se_log_HR_cardiomort_M, .after = UCI_cardiomort_M)
-
-#CVD
-#Calculate log HR of CVD HR for women AND SE so we can use it in the meta analysis
-preDM_priority_filtered_single_forMETA <- preDM_priority_filtered_single_forMETA %>% 
-  mutate(
-    log_HR_CVD_F = log(HR_CVD_F),
-    se_log_HR_CVD_F = (log(UCI_CVD_F) - log(LCI_CVD_F)) / (2*1.96)
-  ) %>% 
-  relocate(log_HR_CVD_F, .after = HR_CVD_F) %>% 
-  relocate(se_log_HR_CVD_F, .after = UCI_CVD_F)
-
-#Calculate log HR of CVD HR for women AND SE so we can use it in the meta analysis
-preDM_priority_filtered_single_forMETA <- preDM_priority_filtered_single_forMETA %>% 
-  mutate(
-    log_HR_CVD_M = log(HR_CVD_M),
-    se_log_HR_CVD_M = (log(UCI_CVD_M) - log(LCI_CVD_M)) / (2*1.96)
-  ) %>% 
-  relocate(log_HR_CVD_M, .after = HR_CVD_M) %>% 
-  relocate(se_log_HR_CVD_M, .after = UCI_CVD_M)
-
-#Calculate log HR of CHD HR for women AND SE so we can use it in the meta analysis
-preDM_priority_filtered_single_forMETA <- preDM_priority_filtered_single_forMETA %>% 
-  mutate(
-    log_HR_CHD_F = log(HR_CHD_F),
-    se_log_HR_CHD_F = (log(UCI_CHD_F) - log(LCI_CHD_F)) / (2*1.96)
-  ) %>% 
-  relocate(log_HR_CHD_F, .after = HR_CHD_F) %>% 
-  relocate(se_log_HR_CHD_F, .after = UCI_CHD_F)
-
-#CHD - MEN
-#Calculate log HR of CHD HR for women AND SE so we can use it in the meta analysis
-preDM_priority_filtered_single_forMETA <- preDM_priority_filtered_single_forMETA %>% 
-  mutate(
-    log_HR_CHD_M = log(HR_CHD_M),
-    se_log_HR_CHD_M = (log(UCI_CHD_M) - log(LCI_CHD_M)) / (2*1.96)
-  ) %>% 
-  relocate(log_HR_CHD_M, .after = HR_CHD_M) %>% 
-  relocate(se_log_HR_CHD_M, .after = UCI_CHD_M)
-
-#stroke
-#Calculate log HR of STROKE HR for women AND SE so we can use it in the meta analysis
-preDM_priority_filtered_single_forMETA <- preDM_priority_filtered_single_forMETA %>% 
-  mutate(
-    log_HR_stroke_F = log(HR_stroke_F),
-    se_log_HR_stroke_F = (log(UCI_stroke_F) - log(LCI_stroke_F)) / (2*1.96)
-  ) %>% 
-  relocate(log_HR_stroke_F, .after = HR_stroke_F) %>% 
-  relocate(se_log_HR_stroke_F, .after = UCI_stroke_F)
-
-#Calculate log HR of STROKE HR for women AND SE so we can use it in the meta analysis
-preDM_priority_filtered_single_forMETA <- preDM_priority_filtered_single_forMETA %>% 
-  mutate(
-    log_HR_stroke_M = log(HR_stroke_M),
-    se_log_HR_stroke_M = (log(UCI_stroke_M) - log(LCI_stroke_M)) / (2*1.96)
-  ) %>% 
-  relocate(log_HR_stroke_M, .after = HR_stroke_M) %>% 
-  relocate(se_log_HR_stroke_M, .after = UCI_stroke_M)
-
-
-
-#keep 1:3, and then variables that start with se or log
-pooled_single <- preDM_priority_filtered_single_forMETA %>% 
-  select(1:3, matches("^(se_|log_)"))
-
-
-final_table <- bind_rows(pooled_single, pooled_multi)
-  
-
+temp2 <- temp2 %>% 
+  left_join(.,def_priority_save, by = "duplicate") %>% 
+  relocate(def_priority, .after = duplicate)
 
 
 #==================================================
-#STEP 8 - META ANALYSIS - FINAL TABLE  
+#STEP 3 - MAKE FINAL TABLE - combine single & multi
 #===================================================
+
+#1. calc log_HR and se_log_HR for all outcomes
+
+#Filter by highest priority, then studies with NO SUBGROUPS per definition
+preDM_forMETA_single <- preDM_with_priority %>%
+  group_by(duplicate) %>% 
+  filter(def_priority == min(def_priority)) %>% 
+  filter(n()==1) %>% 
+  select(Author, duplicate, def_priority, HR_mort_F:UCI_mort_M, HR_cardiomort_F:UCI_cardiomort_M, HR_stroke_F:UCI_stroke_M, HR_iscstroke_F:UCI_iscstroke_M,HR_hemstroke_F:UCI_hemstroke_M,HR_CVD_F:UCI_CVD_M,HR_CHD_F:UCI_CHD_M,HR_CKD_F:UCI_CKD_M,HR_HF_F:UCI_HF_M) %>% 
+  ungroup()
+
+
+temp3 <- preDM_forMETA_single %>% 
+  
+  #pivot longer, then separate HR,LCI,UCI so they're all separate columns, then calc HR and SE
+  pivot_longer(.,-c(Author,duplicate,def_priority)) %>% 
+  separate(name, into = c("var","outcome","sex"), sep = "_") %>% 
+  pivot_wider(.,names_from = c(var), values_from = value) %>% 
+  mutate(
+    logHR = log(HR),
+    selogHR = (log(UCI) - log(LCI)) / (2*1.96)
+  ) %>% 
+  
+  #reunite and pivot back
+  unite("var", c(outcome,sex)) %>% 
+  select(Author, duplicate,def_priority, var, logHR, selogHR) %>% 
+  pivot_wider(names_from = var, values_from = c(logHR, selogHR))
+
+
+#combine the two tables vertically
+final_table <- bind_rows(temp2,temp3)
+
+#save matchings for all studies
+def_priority_save2 <- final_table %>% 
+  select(duplicate,def_priority) %>% 
+  filter(!duplicated(duplicate))
+
+#==================================================
+#STEP 4 - RUN META ANALYSIS ON FINAL TABLE
+#===================================================
+
+temp4 <- final_table %>% 
+  pivot_longer(-c(Author,duplicate,def_priority)) %>% 
+  separate(name, into = c("var", "outcome", "sex"), sep = "_") %>% 
+  pivot_wider(names_from = c(var), values_from = value) %>% 
+  drop_na() %>% 
+  group_by(outcome,sex) %>% 
+  nest() %>% 
+  mutate(
+    
+    metaresult = map(data, ~metagen(
+      
+      TE = .x$logHR,
+      seTE = .x$selogHR,
+      data = .x,
+      backtransf = T,
+      sm="HR",
+      method.tau = "DL",
+      subgroup = .x$def_priority
+    )),
+    
+    summaryEffect = map(metaresult,~tibble(
+      
+      logHR_pooled = .x$TE.random,
+      selogHR_pooled = .x$seTE.random,
+    
+    )),
+    
+    subgroupEffects = map(metaresult, ~tibble(
+
+      def_priority = .x$subgroup.levels,
+      logHR_byDefinition = .x$TE.random.w,
+      selogHR_byDefinition = .x$seTE.random.w
+
+    ))
+    
+  )
+
+#extract & clean
+pooledResults <- temp4 %>% 
+  select(outcome,sex,summaryEffect) %>% 
+  unnest(summaryEffect) %>% 
+  mutate(
+    HR_pooled = exp(logHR_pooled),
+    LCI = exp(logHR_pooled - 1.96*selogHR_pooled),
+    UCI = exp(logHR_pooled + 1.96*selogHR_pooled)
+  ) %>% 
+  select(-c(logHR_pooled,selogHR_pooled)) %>% 
+  pivot_wider(names_from = sex, values_from = c(HR_pooled,LCI,UCI)) %>% 
+  select(outcome, ends_with("_F"),ends_with("_M"))
+
+  
+subgroupResults <- temp4 %>% 
+  select(outcome,sex,subgroupEffects) %>% 
+  unnest(subgroupEffects) %>% 
+  mutate(
+    HR_byDefinition = exp(logHR_byDefinition),
+    LCI = exp(logHR_byDefinition - 1.96*selogHR_byDefinition),
+    UCI = exp(logHR_byDefinition + 1.96*selogHR_byDefinition)
+  ) %>% 
+  select(-c(logHR_byDefinition,selogHR_byDefinition)) %>% 
+  pivot_wider(names_from = sex, values_from = c(HR_byDefinition,LCI,UCI)) %>% 
+  select(outcome, def_priority, ends_with("_F"),ends_with("_M"))
+
+
+#last step --> calculate RHRs and run final metas
+
+pooledRHR <- temp4 %>% 
+  select(outcome,sex,summaryEffect) %>% 
+  unnest(summaryEffect) %>% 
+  pivot_wider(names_from = sex, values_from = c(logHR_pooled,selogHR_pooled)) %>% 
+  mutate(
+    logRHR      = logHR_pooled_F - logHR_pooled_M,
+    se_logRHR   = sqrt(selogHR_pooled_F^2 + selogHR_pooled_M^2),
+    RHR_pooled  = exp(logRHR),
+    LCI         = exp(logRHR - 1.96 * se_logRHR),
+    UCI         = exp(logRHR + 1.96 * se_logRHR)
+  ) %>% 
+  select(outcome, logRHR, LCI, UCI)
+
+
+
+
+
+
+
+
+
+
+
+
+
+  
+    mutate(
+    
+    mortFmeta = map(.x, metagen(
+      
+      TE = log_HR_mort_F,
+      seTE = se_log_HR_mort_F,
+      data = final_table,
+      backtransf = T,
+      sm="HR",
+      method.tau = "DL",
+      subgroup = final_table$def_priority
+      
+      
+      
+      
+      
+    )) 
+    
+  )
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 #---------
 #MORTALITY
